@@ -130,10 +130,8 @@ class ChildHomeViewController: UIViewController {
         let database = Firestore.firestore()
         let id = Auth.auth().currentUser?.uid ?? ""
         
-        let docRef = database.collection("Childs")
-            .whereField("id", isEqualTo: id)
-        
-        docRef.addSnapshotListener { (querySnapshot, err) in
+        let docRef = database.collection("Childs").whereField("id", isEqualTo: id)
+        docRef.getDocuments { (querySnapshot, err) in
             if let err = err {
                 print("Error getting documents: \(err)")
             } else {
@@ -142,17 +140,15 @@ class ChildHomeViewController: UIViewController {
                     let data = document.data()
                     self.parentID = data["parent_id"] as? String ?? ""
                     
-                    // Guard against empty IDs
-                    if self.childDocID.isEmpty || self.parentID.isEmpty {
-                        print("Error: Document ID or Parent ID is empty!")
-                        return
-                    }
+                    print("Fetched childDocID: \(self.childDocID)")  // Debugging log
                     
-                    self.saveDeviceForUser()
+                    // ✅ Now call updateChildLocation only when childDocID is available
+                    self.updateChildLocation()
                 }
             }
         }
     }
+
 
     
     
@@ -270,29 +266,74 @@ class ChildHomeViewController: UIViewController {
     }
     
     
+    var lastUpdateTime: Date?
+
     @objc func updateChildLocation() {
-        guard let currentLocation = selectedLocation, !childDocID.isEmpty else {
-            print("Error: Child Doc ID is empty or location is not set")
+        guard let currentLocation = selectedLocation else {
+            print("No location data available.")
             return
         }
 
-        let path = "Childs"
+        // Ensure we have a valid `childDocID`
+        if childDocID.isEmpty {
+            print("Error: Child Doc ID is empty, cannot update Firestore.")
+            return
+        }
+
+        // Check if enough time has passed since the last update
+        if let lastTime = lastUpdateTime, Date().timeIntervalSince(lastTime) < 10 {
+            print("Skipping update: Last update was less than 10 seconds ago.")
+            return
+        }
+
+        lastUpdateTime = Date()  // Update timestamp
+
         let db = Firestore.firestore()
-        
+
         let params: [String: Any] = [
             "lat": currentLocation.coordinate.latitude,
             "lng": currentLocation.coordinate.longitude,
             "address": addressLBL.text ?? ""
         ]
 
-        db.collection(path).document(childDocID).updateData(params) { error in
+        db.collection("Childs").document(childDocID).updateData(params) { error in
             if let error = error {
-                print("Error updating location: \(error.localizedDescription)")
+                print("Error updating child's location: \(error.localizedDescription)")
             } else {
                 print("Child location successfully updated")
+                self.updateParentsLocation(currentLocation)
             }
         }
     }
+    
+    func updateParentsLocation(_ location: CLLocation) {
+        // Ensure parentID is available
+        if parentID.isEmpty {
+            print("Error: Parent ID is empty, cannot update parent's location.")
+            return
+        }
+
+        let db = Firestore.firestore()
+
+        // Prepare data for Firestore update
+        let parentParams: [String: Any] = [
+            "child_lat": location.coordinate.latitude,
+            "child_lng": location.coordinate.longitude,
+            "child_address": addressLBL.text ?? ""  // Ensure address is set correctly
+        ]
+        
+        // Update the parent's Firestore document
+        db.collection("Parents").document(parentID).updateData(parentParams) { error in
+            if let error = error {
+                print("Error updating parent's location: \(error.localizedDescription)")
+            } else {
+                print("Parent's location successfully updated with child's data")
+            }
+        }
+    }
+
+
+
 
     func addDevice() {
         
